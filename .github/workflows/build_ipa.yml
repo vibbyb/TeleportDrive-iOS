@@ -74,7 +74,14 @@ jobs:
           test -f "${{ env.PROJECT }}/project.pbxproj" || { echo "::error::Missing Xcode project"; exit 1; }
           echo "=== Xcode ==="
           xcodebuild -version
+          xcodebuild -showsdks || true
+          ls -d /Applications/Xcode* || true
           xcodebuild -list -project "${{ env.PROJECT }}"
+
+      - name: Ensure iOS Platform Runtime
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadPlatform iOS || true
 
       - name: Archive (unsigned Debug, iphoneos)
         run: |
