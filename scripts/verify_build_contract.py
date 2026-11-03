@@ -35,7 +35,10 @@ def verify_no_pairing_credentials_tracked(repo_path: Path) -> tuple[bool, list[s
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
+    except subprocess.TimeoutExpired:
+        return False, ["git ls-files timed out after 30s"]
     except subprocess.CalledProcessError as exc:
         return False, [f"Failed to run git ls-files: {exc}"]
     except FileNotFoundError:

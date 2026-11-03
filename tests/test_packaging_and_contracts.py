@@ -26,9 +26,9 @@ from verify_build_contract import (  # noqa: E402
 
 def _init_git_repo(path: Path) -> None:
     """Helper to initialize a real git repository in a temp directory."""
-    subprocess.run(["git", "init"], cwd=str(path), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(path), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(path), check=True, capture_output=True)
+    subprocess.run(["git", "init"], cwd=str(path), check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(path), check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(path), check=True, capture_output=True, timeout=30)
 
 
 def _create_dummy_source_ipa(path: Path, app_name: str = "StikDebug") -> None:
@@ -76,8 +76,8 @@ class TestVerifyNoPairingCredentialsTracked:
             info_plist = app_dir / "Info.plist"
             info_plist.write_text("<plist></plist>", encoding="utf-8")
 
-            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(repo), check=True, capture_output=True, timeout=30)
 
             ok, offending = verify_no_pairing_credentials_tracked(repo)
             assert ok is True
@@ -91,8 +91,8 @@ class TestVerifyNoPairingCredentialsTracked:
             leaked = repo / "RPPairing-secret.plist"
             leaked.write_text("<secret></secret>", encoding="utf-8")
 
-            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "Leak commit"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "Leak commit"], cwd=str(repo), check=True, capture_output=True, timeout=30)
 
             ok, offending = verify_no_pairing_credentials_tracked(repo)
             assert ok is False
@@ -106,8 +106,8 @@ class TestVerifyNoPairingCredentialsTracked:
             leaked = repo / "device.mobiledevicepairing"
             leaked.write_text("token", encoding="utf-8")
 
-            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "Leak pairing"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True, timeout=30)
+            subprocess.run(["git", "commit", "-m", "Leak pairing"], cwd=str(repo), check=True, capture_output=True, timeout=30)
 
             ok, offending = verify_no_pairing_credentials_tracked(repo)
             assert ok is False
@@ -247,6 +247,7 @@ class TestCLIExecutions:
             capture_output=True,
             text=True,
             check=True,
+            timeout=30,
         )
         assert res.returncode == 0
         assert "SECURITY_CONTRACT_OK" in res.stdout
@@ -280,6 +281,7 @@ class TestCLIExecutions:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=30,
             )
             assert inject_res.returncode == 0
             assert "INJECTION_SUCCESS" in inject_res.stdout
@@ -290,6 +292,7 @@ class TestCLIExecutions:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=30,
             )
             assert verify_res.returncode == 0
             assert "IPA_VERIFIED_READY" in verify_res.stdout
