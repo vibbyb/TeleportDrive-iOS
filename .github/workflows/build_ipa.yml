@@ -31,9 +31,9 @@ env:
   SCHEME: StikDebug
   CONFIGURATION: Debug
   DEPLOYMENT_TARGET: "17.4"
-  IPA_NAME: RouteSim-Debug.ipa
+  IPA_NAME: TeleportDrive-Debug.ipa
   BUNDLE_ID: com.stik.routesim
-  DISPLAY_NAME: RouteSim
+  DISPLAY_NAME: TeleportDrive
   UPLOAD_IPA: ${{ vars.UPLOAD_IPA || 'true' }}
 
 jobs:

@@ -41,6 +41,13 @@ final class RoutePlayer: ObservableObject {
     @Published private(set) var currentCoordinate: CLLocationCoordinate2D?
     @Published private(set) var prepareError: String?
 
+    // MARK: - Auto-Park State (Life360 trip finalization)
+    @Published private(set) var isAutoParking: Bool = false
+    @Published private(set) var autoParkRemainingSeconds: Int = 0
+    var autoParkDurationSeconds: Int = 540
+    var autoParkEnabled: Bool = true
+    private var autoParkTimer: DispatchSourceTimer?
+
     // MARK: - Tick configuration
     private let tickInterval: TimeInterval = 1.0
 
@@ -114,6 +121,7 @@ final class RoutePlayer: ObservableObject {
     // MARK: - Playback controls
 
     func play() {
+        stopAutoPark()
         if profile.mode == .standstill {
             guard let coord = waypoints.first, !isPlaying else { return }
             currentCoordinate = coord
@@ -134,6 +142,7 @@ final class RoutePlayer: ObservableObject {
         guard isPlaying else { return }
         isPlaying = false
         stopTick()
+        stopAutoPark()
         if let coord = currentCoordinate {
             simulator.startHold(at: coord)
         }
@@ -142,6 +151,7 @@ final class RoutePlayer: ObservableObject {
     func stop() {
         isPlaying = false
         stopTick()
+        stopAutoPark()
         simulator.clear()
         odometer = 0
         currentSpeed = 0
@@ -149,6 +159,47 @@ final class RoutePlayer: ObservableObject {
         busStopStartTimes = [:]
         currentCoordinate = nil
         stats = RouteStats(totalDistance: cumulative.last ?? 0)
+    }
+
+    func teleportAndHold(at coordinate: CLLocationCoordinate2D) {
+        stopTick()
+        stopAutoPark()
+        isPlaying = false
+        currentCoordinate = coordinate
+        stats = RouteStats(speedMps: 0, course: 0, odometer: 0, totalDistance: 0, elapsed: 0, progress: 1.0, eta: 0)
+        Task { _ = await simulator.setLocation(coordinate) }
+        simulator.startHold(at: coordinate, jitterMeters: 0.25)
+    }
+
+    // MARK: - Auto-Park Engine
+
+    private func startAutoPark(at coord: CLLocationCoordinate2D) {
+        stopAutoPark()
+        isAutoParking = true
+        autoParkRemainingSeconds = autoParkDurationSeconds
+
+        let source = DispatchSource.makeTimerSource(queue: .main)
+        source.schedule(deadline: .now() + 1.0, repeating: 1.0, leeway: .milliseconds(50))
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            if self.autoParkRemainingSeconds > 1 {
+                self.autoParkRemainingSeconds -= 1
+            } else {
+                self.autoParkRemainingSeconds = 0
+                self.isAutoParking = false
+                self.autoParkTimer?.cancel()
+                self.autoParkTimer = nil
+            }
+        }
+        source.resume()
+        autoParkTimer = source
+    }
+
+    func stopAutoPark() {
+        autoParkTimer?.cancel()
+        autoParkTimer = nil
+        isAutoParking = false
+        autoParkRemainingSeconds = 0
     }
 
     func scrub(to progress: Double) {
@@ -236,17 +287,22 @@ final class RoutePlayer: ObservableObject {
             let (coord, bearing) = RouteGeometry.position(
                 at: odometer, coords: densified, cumulative: cumulative)
             currentCoordinate = coord
-            updateStats(speed: currentSpeed, bearing: bearing)
             Task { _ = await simulator.setLocation(coord) }
 
             if loop {
+                updateStats(speed: currentSpeed, bearing: bearing)
                 odometer = 0
                 currentSpeed = 0
                 busStopStartTimes = [:]
             } else {
+                currentSpeed = 0
+                updateStats(speed: 0, bearing: bearing)
                 isPlaying = false
                 stopTick()
-                simulator.startHold(at: coord)
+                simulator.startHold(at: coord, jitterMeters: 0.4)
+                if autoParkEnabled && (profile.mode == .drive || profile.mode == .custom) {
+                    startAutoPark(at: coord)
+                }
                 onRouteFinished?()
             }
             return

@@ -142,6 +142,23 @@ struct MovementProfile: Codable {
         customSpeedMps: 0
     )
 
+    static func drive(cruiseMph: Double, useRoadSpeedLimits: Bool = false) -> MovementProfile {
+        let clampedMph = min(max(cruiseMph, 5.0), 120.0)
+        let cruiseMps = clampedMph * 0.44704
+        return MovementProfile(
+            mode: .drive,
+            cruiseSpeed: cruiseMps,
+            maxSpeed: max(cruiseMps * 1.25, cruiseMps + 4.5),
+            acceleration: 2.0,
+            braking: 2.5,
+            turnSlowdownFactor: 0.5,
+            speedJitter: 0.04,
+            useRoadSpeedLimits: useRoadSpeedLimits,
+            stopDwellRange: nil,
+            customSpeedMps: cruiseMps
+        )
+    }
+
     static func custom(speedMps: CLLocationSpeed) -> MovementProfile {
         MovementProfile(
             mode: .custom,

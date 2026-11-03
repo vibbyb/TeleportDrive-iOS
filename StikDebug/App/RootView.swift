@@ -5,10 +5,17 @@ struct RootView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
-        if hasCompletedOnboarding {
-            mainTabs
-        } else {
-            OnboardingView {
+        Group {
+            if hasCompletedOnboarding || PairingFileStore.hasPairingFile {
+                mainTabs
+            } else {
+                OnboardingView {
+                    hasCompletedOnboarding = true
+                }
+            }
+        }
+        .onAppear {
+            if PairingFileStore.hasPairingFile {
                 hasCompletedOnboarding = true
             }
         }

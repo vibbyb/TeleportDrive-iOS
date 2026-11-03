@@ -5,17 +5,171 @@ struct PlaybackControlsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            // 1. Status Indicator Header
+            statusHeaderRow
+
+            // 2. 1-Tap Action Row when Pin / Destination is ready and not playing
+            if vm.placementPhase == .ready && !vm.isPlaying && !vm.isAutoParking {
+                oneTapActionRow
+            }
+
+            // 3. Auto-Park Banner
+            if vm.isAutoParking {
+                autoParkBanner
+            }
+
+            // 4. Progress Scrubber Row
             if showProgressRow {
                 progressRow
             }
 
+            // 5. Standard Transport Controls
             transportRow
 
+            // 6. Cruise Speed & Auto-Park 9m Toggle
+            if vm.selectedMode == .drive || vm.selectedMode == .custom {
+                driveSpeedAndOptionsRow
+            }
+
+            // 7. Speed multiplier options (0.5x .. 10x)
             if vm.selectedMode != .standstill {
-                optionsRow
+                speedMultiplierRow
             }
         }
         .padding(12)
+    }
+
+    // MARK: - Status Header
+
+    private var statusHeaderRow: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 9, height: 9)
+
+            Text(statusText)
+                .font(.subheadline.bold())
+                .foregroundStyle(statusColor)
+
+            Spacer()
+
+            if vm.isHoldingLocation || vm.isPlaying || vm.isAutoParking {
+                Button("Restore Real GPS") {
+                    vm.restoreRealGPS()
+                }
+                .font(.caption2.bold())
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var statusColor: Color {
+        if vm.isAutoParking { return .orange }
+        if vm.isPlaying { return .blue }
+        if vm.isHoldingLocation || vm.selectedMode == .standstill { return .green }
+        return .secondary
+    }
+
+    private var statusText: String {
+        if vm.isAutoParking {
+            let m = vm.autoParkRemainingSeconds / 60
+            let s = vm.autoParkRemainingSeconds % 60
+            return "🅿️ Auto-Park Hold (\(String(format: "%d:%02d", m, s)))"
+        }
+        if vm.isPlaying {
+            let mph = Int(vm.stats.speedMps * 2.23694)
+            return "🚗 Driving (\(mph) mph)"
+        }
+        if vm.isHoldingLocation || vm.selectedMode == .standstill {
+            return "🟢 Holding GPS (Locked)"
+        }
+        return "⚪ Real GPS"
+    }
+
+    // MARK: - 1-Tap Action Row
+
+    private var oneTapActionRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                if let target = vm.endPinCoordinate ?? vm.startPinCoordinate {
+                    let name = vm.selectedDestinationName ?? "Teleport Pin"
+                    vm.instantTeleport(to: target, name: name)
+                }
+            } label: {
+                Label("Teleport & Hold", systemImage: "bolt.fill")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+
+            Button {
+                vm.playPause()
+            } label: {
+                Label("Start Drive", systemImage: "car.fill")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.accentColor)
+        }
+        .padding(.horizontal, 2)
+    }
+
+    // MARK: - Auto-Park Banner
+
+    private var autoParkBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "parkingsign.circle.fill")
+                .foregroundStyle(.orange)
+                .font(.title3)
+
+            VStack(alignment: .leading, spacing: 1) {
+                let m = vm.autoParkRemainingSeconds / 60
+                let s = vm.autoParkRemainingSeconds % 60
+                Text("Auto-Park Hold: \(String(format: "%d:%02d", m, s))")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+                Text("Spoofed at destination for Life360 & Find My")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Cancel") {
+                vm.player.stopAutoPark()
+            }
+            .font(.caption2.bold())
+            .buttonStyle(.bordered)
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    // MARK: - Cruise Speed & Options
+
+    private var driveSpeedAndOptionsRow: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("Cruise: \(Int(vm.driveSpeedMph)) mph")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 110, alignment: .leading)
+                Slider(value: $vm.driveSpeedMph, in: 5...120, step: 1)
+            }
+
+            Toggle("Auto-Park 9m (Life360)", isOn: $vm.autoParkEnabled)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .tint(.orange)
+        }
+        .padding(.horizontal, 4)
     }
 
     private var showProgressRow: Bool {
@@ -60,11 +214,7 @@ struct PlaybackControlsView: View {
             .disabled(vm.stats.odometer == 0 && !vm.isPlaying)
 
             Button {
-                if !vm.isPlaying && vm.stats.odometer == 0 {
-                    vm.playPause()
-                } else {
-                    vm.playPause()
-                }
+                vm.playPause()
             } label: {
                 ZStack {
                     if vm.isPreparing {
@@ -96,7 +246,7 @@ struct PlaybackControlsView: View {
 
     // MARK: - Speed multiplier
 
-    private var optionsRow: some View {
+    private var speedMultiplierRow: some View {
         HStack {
             Text("Speed")
                 .font(.caption)

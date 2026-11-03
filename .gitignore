@@ -48,6 +48,10 @@ playground.xcworkspace
 # ─── IDE / editor ────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+scratch/
+__pycache__/
+*.pyc
+.pytest_cache/
 *.swp
 *.swo
 *~
@@ -78,7 +82,11 @@ iOSInjectionProject/
 # Local secrets / pairing files (never commit device pairing data)
 **/rp_pairing_file.plist
 **/pairingFile.plist
+*Pairing*.plist
+DefaultPairing.plist
 *.mobiledevicepairing
+*.mobiledevicepair
+*.ipa
 .env
 .env.*
 

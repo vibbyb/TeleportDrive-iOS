@@ -19,9 +19,11 @@ final class SimulateViewModel: ObservableObject {
     @Published var waypoints: [Waypoint] = []
     @Published var routeName: String = "New Route"
     @Published var selectedMode: MovementMode = .drive
+    @Published var driveSpeedMph: Double = 38.0
     @Published var customSpeedMph: Double = 30
     @Published var speedMultiplier: Double = 1.0
     @Published var loopEnabled: Bool = false
+    @Published var autoParkEnabled: Bool = true
     @Published var mapPosition: MapCameraPosition = .automatic
 
     @Published var placementPhase: RoutePlacementPhase = .idle
@@ -39,6 +41,9 @@ final class SimulateViewModel: ObservableObject {
     // MARK: - Playback
     @Published var isPlaying: Bool = false
     @Published var isPreparing: Bool = false
+    @Published var isAutoParking: Bool = false
+    @Published var autoParkRemainingSeconds: Int = 0
+    @Published var isHoldingLocation: Bool = false
     @Published var stats: RouteStats = RouteStats()
     @Published var currentCoordinate: CLLocationCoordinate2D?
 
@@ -48,6 +53,18 @@ final class SimulateViewModel: ObservableObject {
 
     // MARK: - Save/load
     @Published var showSaveSheet = false
+
+    // MARK: - Google Map & Search
+    @Published var googleMapStyle: GoogleMapStyle = .street
+    @Published var cameraTarget: CLLocationCoordinate2D?
+    @Published var searchQuery: String = ""
+    @Published var searchSuggestions: [PlaceSuggestion] = []
+    @Published var isSearching: Bool = false
+    @Published var selectedDestinationName: String?
+    @Published var savedQuickPins: [PlaceSuggestion] = []
+
+    private let placeSearchService = PlaceSearchService()
+    private var searchTask: Task<Void, Never>?
 
     let player = RoutePlayer()
 
@@ -79,6 +96,18 @@ final class SimulateViewModel: ObservableObject {
         player.$isPreparing.assign(to: &$isPreparing)
         player.$stats.assign(to: &$stats)
         player.$currentCoordinate.assign(to: &$currentCoordinate)
+        player.$isAutoParking.assign(to: &$isAutoParking)
+        player.$autoParkRemainingSeconds.assign(to: &$autoParkRemainingSeconds)
+
+        LocationSimulator.shared.$isHolding
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isHoldingLocation)
+
+        $autoParkEnabled
+            .sink { [weak self] enabled in
+                self?.player.autoParkEnabled = enabled
+            }
+            .store(in: &cancellables)
 
         player.onRouteFinished = { [weak self] in
             self?.selectedMode = .standstill
@@ -89,6 +118,16 @@ final class SimulateViewModel: ObservableObject {
         deviceLocation.$coordinate
             .receive(on: DispatchQueue.main)
             .assign(to: &$userLocation)
+
+        savedQuickPins = QuickPinStorage.loadSavedQuickPins()
+
+        $searchQuery
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { [weak self] query in
+                self?.triggerSearch(query: query)
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Route placement
@@ -202,17 +241,124 @@ final class SimulateViewModel: ObservableObject {
         guard !coords.isEmpty else { return }
 
         var profile = MovementProfile.default(for: selectedMode)
-        if selectedMode == .custom {
+        if selectedMode == .drive {
+            profile = .drive(cruiseMph: driveSpeedMph)
+        } else if selectedMode == .custom {
             let mps = customSpeedMph * 0.44704
             profile = .custom(speedMps: mps)
         }
 
+        player.autoParkEnabled = autoParkEnabled
         player.waypoints = coords
         player.profile = profile
         player.speedMultiplier = speedMultiplier
         player.loop = loopEnabled
 
         await player.prepare()
+    }
+
+    func instantTeleport(to coordinate: CLLocationCoordinate2D, name: String = "Teleport Pin") {
+        let pin = Waypoint(coordinate: coordinate, name: name)
+        startWaypoint = pin
+        endWaypoint = nil
+        waypoints = [pin]
+        placementPhase = .ready
+        placementPrompt = nil
+        routePolyline = nil
+        routedPlaybackCoordinates = [coordinate]
+        player.teleportAndHold(at: coordinate)
+    }
+
+    func restoreRealGPS() {
+        player.stop()
+        LocationSimulator.shared.clear()
+        placementPhase = .idle
+        placementPrompt = nil
+    }
+
+    // MARK: - Search & Quick Presets
+
+    public enum SearchAction {
+        case teleportImmediately
+        case setAsDestination
+        case setAsStart
+    }
+
+    func triggerSearch(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchTask?.cancel()
+
+        guard !trimmed.isEmpty else {
+            searchSuggestions = []
+            isSearching = false
+            return
+        }
+
+        isSearching = true
+        searchTask = Task { [weak self] in
+            guard let self = self else { return }
+            let region = self.currentCoordinate != nil ? MKCoordinateRegion(center: self.currentCoordinate!, latitudinalMeters: 50_000, longitudinalMeters: 50_000) : nil
+            let results = await self.placeSearchService.search(query: trimmed, region: region)
+            guard !Task.isCancelled else { return }
+            self.searchSuggestions = results
+            self.isSearching = false
+        }
+    }
+
+    func performSearch() {
+        triggerSearch(query: searchQuery)
+    }
+
+    func selectSearchSuggestion(_ suggestion: PlaceSuggestion, action: SearchAction) {
+        selectedDestinationName = suggestion.title
+        switch action {
+        case .teleportImmediately:
+            instantTeleport(to: suggestion.coordinate, name: suggestion.title)
+            cameraTarget = suggestion.coordinate
+            searchSuggestions = []
+            searchQuery = ""
+
+        case .setAsDestination:
+            if startWaypoint == nil {
+                let startCoord = currentCoordinate ?? userLocation ?? suggestion.coordinate
+                startWaypoint = Waypoint(coordinate: startCoord, name: "Start Location")
+            }
+            let end = Waypoint(coordinate: suggestion.coordinate, name: suggestion.title)
+            endWaypoint = end
+            waypoints = [startWaypoint!, end]
+            selectedMode = .drive
+            placementPhase = .ready
+            placementPrompt = nil
+            cameraTarget = suggestion.coordinate
+            searchSuggestions = []
+            searchQuery = ""
+            Task { await refreshRoutedPolyline() }
+
+        case .setAsStart:
+            let start = Waypoint(coordinate: suggestion.coordinate, name: suggestion.title)
+            startWaypoint = start
+            endWaypoint = nil
+            waypoints = [start]
+            placementPhase = .pickingEnd
+            placementPrompt = "Tap map to set destination"
+            cameraTarget = suggestion.coordinate
+            searchSuggestions = []
+            searchQuery = ""
+        }
+    }
+
+    func saveCurrentQuickPin(title: String, coordinate: CLLocationCoordinate2D) {
+        _ = QuickPinStorage.saveQuickPin(title: title, coordinate: coordinate)
+        savedQuickPins = QuickPinStorage.loadSavedQuickPins()
+    }
+
+    func deleteSavedQuickPin(id: UUID) {
+        QuickPinStorage.deleteQuickPin(id: id)
+        savedQuickPins = QuickPinStorage.loadSavedQuickPins()
+    }
+
+    func loadSavedQuickPins() {
+        savedQuickPins = QuickPinStorage.loadSavedQuickPins()
     }
 
     func playPause() {

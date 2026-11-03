@@ -58,7 +58,7 @@ struct OnboardingView: View {
                     message: "RouteSim needs a pairing file to communicate with your device's debug services. Generate one with `pymobiledevice3` on a trusted computer and import it here.",
                     tint: .orange
                 )
-                if pairingImported || FileManager.default.fileExists(atPath: PairingFileStore.prepareURL().path) {
+                if pairingImported || PairingFileStore.hasPairingFile {
                     Label("Pairing file imported", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 } else {
@@ -113,7 +113,7 @@ struct OnboardingView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(step == .pairing && !pairingImported && !FileManager.default.fileExists(atPath: PairingFileStore.prepareURL().path))
+            .disabled(step == .pairing && !pairingImported && !PairingFileStore.hasPairingFile)
         }
 
         // Step indicator

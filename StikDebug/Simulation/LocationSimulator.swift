@@ -51,7 +51,7 @@ final class LocationSimulator: ObservableObject {
     @Published private(set) var isHolding = false
     @Published private(set) var lastError: LocationSimulatorError?
 
-    private var holdTimer: Timer?
+    private var holdTimer: DispatchSourceTimer?
     private var holdCoordinate: CLLocationCoordinate2D?
 
     private init() {}
@@ -93,31 +93,48 @@ final class LocationSimulator: ObservableObject {
     // Keeps re-sending the last coordinate every 4 seconds so iOS does not
     // revert to the real GPS while the player is paused or at end-of-route.
 
-    func startHold(at coordinate: CLLocationCoordinate2D) {
+    func startHold(at coordinate: CLLocationCoordinate2D, jitterMeters: Double = 0.35) {
         stopHold()
         holdCoordinate = coordinate
-        isHolding = true
-
-        DispatchQueue.main.async {
-            self.holdTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
-                guard let self, let coord = self.holdCoordinate else { return }
-                LocationSimulationCommandQueue.shared.async {
-                    _ = simulate_location(
-                        DeviceConnectionContext.targetIPAddress,
-                        coord.latitude, coord.longitude,
-                        PairingFileStore.prepareURL().path
-                    )
-                }
+        if Thread.isMainThread {
+            self.isHolding = true
+        } else {
+            DispatchQueue.main.async {
+                self.isHolding = true
             }
         }
+        BackgroundAudioManager.shared.start()
+
+        let source = DispatchSource.makeTimerSource(queue: LocationSimulationCommandQueue.shared)
+        source.schedule(deadline: .now() + 4.0, repeating: 4.0, leeway: .milliseconds(100))
+        source.setEventHandler { [weak self] in
+            guard let self, let coord = self.holdCoordinate else { return }
+            let dLat = Double.random(in: -jitterMeters...jitterMeters) / 111_111.0
+            let cosLat = cos(coord.latitude * .pi / 180.0)
+            let dLon = Double.random(in: -jitterMeters...jitterMeters) / (111_111.0 * max(0.1, cosLat))
+            let jitteredLat = coord.latitude + dLat
+            let jitteredLon = coord.longitude + dLon
+            _ = simulate_location(
+                DeviceConnectionContext.targetIPAddress,
+                jitteredLat,
+                jitteredLon,
+                PairingFileStore.prepareURL().path
+            )
+        }
+        self.holdTimer = source
+        source.resume()
     }
 
     func stopHold() {
-        DispatchQueue.main.async {
-            self.holdTimer?.invalidate()
-            self.holdTimer = nil
+        holdTimer?.cancel()
+        holdTimer = nil
+        holdCoordinate = nil
+        if Thread.isMainThread {
             self.isHolding = false
-            self.holdCoordinate = nil
+        } else {
+            DispatchQueue.main.async {
+                self.isHolding = false
+            }
         }
     }
 }

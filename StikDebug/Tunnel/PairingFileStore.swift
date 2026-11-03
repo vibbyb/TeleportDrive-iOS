@@ -16,6 +16,10 @@ enum PairingFileStore {
 
     private static let legacyFileName = "pairingFile.plist"
 
+    static var hasPairingFile: Bool {
+        FileManager.default.fileExists(atPath: prepareURL().path)
+    }
+
     static var url: URL {
         directoryURL.appendingPathComponent(fileName)
     }
@@ -31,6 +35,17 @@ enum PairingFileStore {
         }
 
         migrateLegacyCopy(to: destination, fileManager: fileManager)
+
+        if !fileManager.fileExists(atPath: destination.path) {
+            if let bundledURL = Bundle.main.url(forResource: "DefaultPairing", withExtension: "plist"),
+               fileManager.fileExists(atPath: bundledURL.path) {
+                if let data = try? Data(contentsOf: bundledURL) {
+                    try? data.write(to: destination, options: .atomic)
+                    protectPairingFile(at: destination, fileManager: fileManager)
+                }
+            }
+        }
+
         return destination
     }
 

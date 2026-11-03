@@ -1,0 +1,10 @@
+{
+  "include": [
+    "scripts",
+    "tests"
+  ],
+  "extraPaths": [
+    "scripts"
+  ],
+  "pythonVersion": "3.14"
+}
