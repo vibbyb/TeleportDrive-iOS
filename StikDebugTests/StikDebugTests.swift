@@ -234,6 +234,11 @@ final class RouteSimTests: XCTestCase {
         XCTAssertTrue(urlStreet.absoluteString.contains("z=6"))
         XCTAssertTrue(urlStreet.absoluteString.contains("scale=2"))
 
+        let satelliteOverlay = GoogleMapsTileOverlay(style: .satellite)
+        XCTAssertEqual(satelliteOverlay.style.lyrsCode, "s")
+        let urlSatellite = satelliteOverlay.url(forTilePath: path)
+        XCTAssertTrue(urlSatellite.absoluteString.contains("lyrs=s"))
+
         let hybridOverlay = GoogleMapsTileOverlay(style: .hybrid)
         XCTAssertEqual(hybridOverlay.style.lyrsCode, "y")
         let urlHybrid = hybridOverlay.url(forTilePath: path)

@@ -8,7 +8,8 @@ import UIKit
 
 public enum GoogleMapStyle: String, CaseIterable, Identifiable {
     case street = "Street"
-    case hybrid = "Satellite"
+    case satellite = "Satellite"
+    case hybrid = "Hybrid"
     case terrain = "Terrain"
 
     public var id: String { rawValue }
@@ -16,6 +17,7 @@ public enum GoogleMapStyle: String, CaseIterable, Identifiable {
     public var lyrsCode: String {
         switch self {
         case .street: return "m"
+        case .satellite: return "s"
         case .hybrid: return "y"
         case .terrain: return "p"
         }
