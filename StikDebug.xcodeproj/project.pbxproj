@@ -52,6 +52,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				idevice/libidevice_ffi.a,
 			);
 			target = DC6F1D362D94EADD0071B2B6 /* StikDebug */;
 		};
