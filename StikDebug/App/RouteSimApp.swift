@@ -26,6 +26,7 @@ struct RouteSimApp: App {
         case .background:
             shouldAttemptTunnelReconnect = true
         case .active:
+            LocationSimulator.shared.refreshHoldIfNeeded()
             if shouldAttemptTunnelReconnect {
                 shouldAttemptTunnelReconnect = false
                 startTunnelInBackground(showErrorUI: false)

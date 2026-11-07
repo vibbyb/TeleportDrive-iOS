@@ -74,7 +74,7 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
     """Verify Swift code architecture invariants."""
     failures: list[str] = []
 
-    # 1. PairingFileStore references DefaultPairing
+    # 1. PairingFileStore references DefaultPairing and implements resetToBundledDefault
     pairing_store = repo_path / "StikDebug" / "Tunnel" / "PairingFileStore.swift"
     if not pairing_store.is_file():
         failures.append(f"Missing file: {pairing_store}")
@@ -82,8 +82,10 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
         text = pairing_store.read_text(encoding="utf-8")
         if "DefaultPairing" not in text:
             failures.append("StikDebug/Tunnel/PairingFileStore.swift does not reference DefaultPairing")
+        if "resetToBundledDefault" not in text:
+            failures.append("StikDebug/Tunnel/PairingFileStore.swift does not implement resetToBundledDefault")
 
-    # 2. LocationSimulator uses DispatchSourceTimer
+    # 2. LocationSimulator uses DispatchSourceTimer and implements 1 Hz hold
     loc_sim = repo_path / "StikDebug" / "Simulation" / "LocationSimulator.swift"
     if not loc_sim.is_file():
         failures.append(f"Missing file: {loc_sim}")
@@ -91,8 +93,10 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
         text = loc_sim.read_text(encoding="utf-8")
         if "DispatchSourceTimer" not in text:
             failures.append("StikDebug/Simulation/LocationSimulator.swift does not use DispatchSourceTimer")
+        if "holdIntervalSeconds" not in text and "1.0" not in text:
+            failures.append("StikDebug/Simulation/LocationSimulator.swift does not specify 1 Hz hold cadence")
 
-    # 3. RoutePlayer implements isAutoParking
+    # 3. RoutePlayer implements isAutoParking and 5 Hz playback
     route_player = repo_path / "StikDebug" / "Simulation" / "RoutePlayer.swift"
     if not route_player.is_file():
         failures.append(f"Missing file: {route_player}")
@@ -100,6 +104,8 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
         text = route_player.read_text(encoding="utf-8")
         if "isAutoParking" not in text:
             failures.append("StikDebug/Simulation/RoutePlayer.swift does not implement isAutoParking")
+        if "0.2" not in text and "5 Hz" not in text:
+            failures.append("StikDebug/Simulation/RoutePlayer.swift does not implement 5 Hz playback")
 
     # 4. GoogleMapView implements MKTileOverlay
     google_map = repo_path / "StikDebug" / "Features" / "Simulate" / "GoogleMapView.swift"
@@ -114,6 +120,38 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
     place_search = repo_path / "StikDebug" / "Features" / "Simulate" / "PlaceSearchService.swift"
     if not place_search.is_file():
         failures.append("StikDebug/Features/Simulate/PlaceSearchService.swift does not exist")
+
+    # 6. 3-tab RootView with DriveView and TeleportView
+    root_view = repo_path / "StikDebug" / "App" / "RootView.swift"
+    if not root_view.is_file():
+        failures.append(f"Missing file: {root_view}")
+    else:
+        text = root_view.read_text(encoding="utf-8")
+        if "DriveView" not in text:
+            failures.append("StikDebug/App/RootView.swift does not reference DriveView")
+        if "TeleportView" not in text:
+            failures.append("StikDebug/App/RootView.swift does not reference TeleportView")
+        if "RouteSimSettingsView" not in text:
+            failures.append("StikDebug/App/RootView.swift does not reference RouteSimSettingsView")
+
+    # 7. SpoofKeepAliveManager exists and implements isActive
+    keep_alive = repo_path / "StikDebug" / "Services" / "SpoofKeepAliveManager.swift"
+    if not keep_alive.is_file():
+        failures.append(f"Missing file: {keep_alive}")
+    else:
+        text = keep_alive.read_text(encoding="utf-8")
+        if "isActive" not in text:
+            failures.append("StikDebug/Services/SpoofKeepAliveManager.swift does not implement isActive")
+
+    # 8. DriveView exists
+    drive_view = repo_path / "StikDebug" / "Features" / "Drive" / "DriveView.swift"
+    if not drive_view.is_file():
+        failures.append(f"Missing file: {drive_view}")
+
+    # 9. TeleportView exists
+    teleport_view = repo_path / "StikDebug" / "Features" / "Teleport" / "TeleportView.swift"
+    if not teleport_view.is_file():
+        failures.append(f"Missing file: {teleport_view}")
 
     if failures:
         return False, failures
@@ -146,8 +184,8 @@ def main() -> int:
     parser.add_argument(
         "--repo-root",
         type=str,
-        default=os.getcwd(),
-        help="Path to repository root (defaults to CWD)",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="Path to repository root (defaults to TeleportDrive root)",
     )
     parser.add_argument(
         "--check-security",

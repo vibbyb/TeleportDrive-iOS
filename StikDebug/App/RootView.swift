@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @StateObject private var tunnelManager = TunnelManager.shared
+    @StateObject private var simulateVM = SimulateViewModel()
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
@@ -24,17 +25,17 @@ struct RootView: View {
     private var mainTabs: some View {
         TabView {
             NavigationStack {
-                SimulateView()
+                DriveView(vm: simulateVM)
             }
             .tabItem {
-                Label("Simulate", systemImage: "location.fill")
+                Label("Drive", systemImage: "car.fill")
             }
 
             NavigationStack {
-                LibraryView()
+                TeleportView(vm: simulateVM)
             }
             .tabItem {
-                Label("Library", systemImage: "map")
+                Label("Teleport", systemImage: "location.fill")
             }
 
             NavigationStack {

@@ -26,12 +26,109 @@ jobs:
       - name: Preflight FFI library
         run: test -f StikDebug/idevice/libidevice_ffi.a
 
-      - name: xcodebuild test (iphonesimulator)
+      - name: Ensure iOS Platform Runtime
         run: |
           set -euo pipefail
-          xcodebuild test \
-            -project StikDebug.xcodeproj \
-            -scheme StikDebug \
-            -destination "platform=iOS Simulator,OS=latest,name=iPhone 16" \
-            -only-testing:StikDebugTests \
-            CODE_SIGNING_ALLOWED=NO
+          xcodebuild -downloadPlatform iOS || true
+
+      - name: Run StikDebugTests (or build-for-testing)
+        run: |
+          set -euo pipefail
+
+          echo "=== Discovering available iPhone Simulator ==="
+          TARGET_UDID=""
+          TARGET_NAME=""
+          TARGET_RUNTIME=""
+
+          PARSED=$(python3 -c '
+          import json, subprocess, sys
+          try:
+              res = subprocess.run(["xcrun", "simctl", "list", "devices", "available", "-j"], capture_output=True, text=True, check=True)
+              data = json.loads(res.stdout)
+              devices = data.get("devices", {})
+              candidates = []
+              for runtime, dev_list in devices.items():
+                  if "iOS" not in runtime:
+                      continue
+                  for dev in dev_list:
+                      avail = dev.get("isAvailable")
+                      if avail is False or avail == "NO":
+                          continue
+                      name = dev.get("name", "")
+                      dev_type = dev.get("deviceTypeIdentifier", "")
+                      if "iPhone" in name or "iPhone" in dev_type:
+                          is_booted = 1 if dev.get("state") == "Booted" else 0
+                          candidates.append((is_booted, runtime, dev.get("udid"), name.replace(" ", "_")))
+              candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+              if candidates:
+                  print(f"{candidates[0][2]} {candidates[0][3]} {candidates[0][1]}")
+          except Exception as err:
+              print(f"Notice: unable to query simctl: {err}", file=sys.stderr)
+          ' 2>/dev/null || true)
+
+          if [ -n "$PARSED" ]; then
+            read -r TARGET_UDID TARGET_NAME TARGET_RUNTIME <<< "$PARSED"
+            echo "Discovered simulator: ${TARGET_NAME} (${TARGET_RUNTIME}) - UDID: ${TARGET_UDID}"
+          fi
+
+          BOOTED_UDID=""
+          if [ -n "$TARGET_UDID" ]; then
+            echo "Ensuring simulator is booted: ${TARGET_UDID}..."
+            xcrun simctl boot "${TARGET_UDID}" 2>/dev/null || true
+            sleep 2
+
+            BOOTED_UDID=$(python3 -c '
+            import json, subprocess, sys
+            try:
+                res = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True, text=True, check=True)
+                data = json.loads(res.stdout)
+                devices = data.get("devices", {})
+                for runtime, dev_list in devices.items():
+                    if "iOS" not in runtime:
+                        continue
+                    for dev in dev_list:
+                        if dev.get("udid") == "'"${TARGET_UDID}"'" and dev.get("state") == "Booted":
+                            print(dev["udid"])
+                            sys.exit(0)
+            except Exception:
+                pass
+            ' 2>/dev/null || true)
+          fi
+
+          if [ -z "$BOOTED_UDID" ]; then
+            # Check if any iPhone simulator is already booted
+            BOOTED_UDID=$(python3 -c '
+            import json, subprocess, sys
+            try:
+                res = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True, text=True, check=True)
+                data = json.loads(res.stdout)
+                devices = data.get("devices", {})
+                for runtime, dev_list in devices.items():
+                    if "iOS" not in runtime:
+                        continue
+                    for dev in dev_list:
+                        if dev.get("state") == "Booted" and "iPhone" in dev.get("name", ""):
+                            print(dev["udid"])
+                            sys.exit(0)
+            except Exception:
+                pass
+            ' 2>/dev/null || true)
+          fi
+
+          if [ -n "$BOOTED_UDID" ]; then
+            echo "=== Booted simulator runtime available: ${BOOTED_UDID} ==="
+            xcodebuild test \
+              -project StikDebug.xcodeproj \
+              -scheme StikDebug \
+              -destination "id=${BOOTED_UDID}" \
+              -only-testing:StikDebugTests \
+              CODE_SIGNING_ALLOWED=NO
+          else
+            echo "=== No booted simulator runtime available on runner ==="
+            echo "Falling back to generic/platform=iOS Simulator with build-for-testing"
+            xcodebuild build-for-testing \
+              -project StikDebug.xcodeproj \
+              -scheme StikDebug \
+              -destination "generic/platform=iOS Simulator" \
+              CODE_SIGNING_ALLOWED=NO
+          fi

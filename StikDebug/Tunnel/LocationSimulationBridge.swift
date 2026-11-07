@@ -73,6 +73,7 @@ func simulate_location(
             LocationSimulationState.cleanup()
             // fall through to slow path (reconnect)
         } else {
+            TunnelManager.shared.recordLocationBridgeStatus(connected: true)
             return LocationSimulationStatus.ok
         }
     }
@@ -125,6 +126,8 @@ func simulate_location(
     if let remoteServerError {
         idevice_error_free(remoteServerError)
         LocationSimulationState.cleanup()
+        TunnelManager.shared.ensureDDIMountedInBackground()
+        TunnelManager.shared.recordLocationBridgeStatus(connected: false)
         return LocationSimulationStatus.remoteServer
     }
 
@@ -135,6 +138,8 @@ func simulate_location(
     if let locationSimulationError {
         idevice_error_free(locationSimulationError)
         LocationSimulationState.cleanup()
+        TunnelManager.shared.ensureDDIMountedInBackground()
+        TunnelManager.shared.recordLocationBridgeStatus(connected: false)
         return LocationSimulationStatus.locationSimulation
     }
     // Ownership of remoteServer transferred to locationSimulation
@@ -151,6 +156,7 @@ func simulate_location(
         return LocationSimulationStatus.locationSet
     }
 
+    TunnelManager.shared.recordLocationBridgeStatus(connected: true)
     return LocationSimulationStatus.ok
 }
 

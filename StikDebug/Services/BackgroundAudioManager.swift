@@ -10,7 +10,7 @@ final class BackgroundAudioManager {
 
     private var engine = AVAudioEngine()
     private var player = AVAudioPlayerNode()
-    private var isRunning = false
+    private(set) var isRunning = false
     private var persistentEnabled = false
     private var activityCount = 0
     private var healthCheckTimer: Timer?

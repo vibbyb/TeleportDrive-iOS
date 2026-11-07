@@ -6,5 +6,6 @@
   "extraPaths": [
     "scripts"
   ],
-  "pythonVersion": "3.14"
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
 }

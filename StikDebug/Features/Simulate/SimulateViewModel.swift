@@ -28,8 +28,8 @@ final class SimulateViewModel: ObservableObject {
 
     @Published var placementPhase: RoutePlacementPhase = .idle
     @Published var placementPrompt: String?
-    @Published private(set) var startWaypoint: Waypoint?
-    @Published private(set) var endWaypoint: Waypoint?
+    @Published var startWaypoint: Waypoint?
+    @Published var endWaypoint: Waypoint?
 
     // MARK: - MKDirections route overlay
     @Published var routePolyline: MKPolyline?
@@ -63,8 +63,19 @@ final class SimulateViewModel: ObservableObject {
     @Published var selectedDestinationName: String?
     @Published var savedQuickPins: [PlaceSuggestion] = []
 
+    // MARK: - Drive & Teleport tabs support
+    @Published var startSearchQuery: String = ""
+    @Published var startSuggestions: [PlaceSuggestion] = []
+    @Published var isSearchingStart: Bool = false
+    @Published var useCurrentLocationForStart: Bool = true
+    @Published var selectedStartName: String = "Current Location"
+    @Published var customSpeedText: String = "35"
+    @Published var isSpoofKeepAliveActive: Bool = false
+    public static let driveSpeedPresetsMph: [Double] = [25, 35, 45, 65]
+
     private let placeSearchService = PlaceSearchService()
     private var searchTask: Task<Void, Never>?
+    private var startSearchTask: Task<Void, Never>?
 
     let player = RoutePlayer()
 
@@ -121,11 +132,24 @@ final class SimulateViewModel: ObservableObject {
 
         savedQuickPins = QuickPinStorage.loadSavedQuickPins()
 
+        Publishers.CombineLatest3(player.$isPlaying, LocationSimulator.shared.$isHolding, SpoofKeepAliveManager.shared.$isActive)
+            .receive(on: DispatchQueue.main)
+            .map { playing, holding, keepAlive in playing || holding || keepAlive }
+            .assign(to: &$isSpoofKeepAliveActive)
+
         $searchQuery
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .removeDuplicates()
             .sink { [weak self] query in
                 self?.triggerSearch(query: query)
+            }
+            .store(in: &cancellables)
+
+        $startSearchQuery
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { [weak self] query in
+                self?.triggerStartSearch(query: query)
             }
             .store(in: &cancellables)
     }
@@ -269,6 +293,14 @@ final class SimulateViewModel: ObservableObject {
         player.teleportAndHold(at: coordinate)
     }
 
+    func selectTeleportTarget(coordinate: CLLocationCoordinate2D, title: String = "Selected Pin") {
+        selectedDestinationName = title
+        let pin = Waypoint(coordinate: coordinate, name: title)
+        startWaypoint = pin
+        waypoints = [pin]
+        cameraTarget = coordinate
+    }
+
     func restoreRealGPS() {
         player.stop()
         LocationSimulator.shared.clear()
@@ -344,6 +376,91 @@ final class SimulateViewModel: ObservableObject {
             cameraTarget = suggestion.coordinate
             searchSuggestions = []
             searchQuery = ""
+        }
+    }
+
+    // MARK: - Start search & Drive controls
+
+    func triggerStartSearch(query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        startSearchTask?.cancel()
+
+        guard !trimmed.isEmpty else {
+            startSuggestions = []
+            isSearchingStart = false
+            return
+        }
+
+        isSearchingStart = true
+        startSearchTask = Task { [weak self] in
+            guard let self = self else { return }
+            let region = self.currentCoordinate != nil ? MKCoordinateRegion(center: self.currentCoordinate!, latitudinalMeters: 50_000, longitudinalMeters: 50_000) : nil
+            let results = await self.placeSearchService.search(query: trimmed, region: region)
+            guard !Task.isCancelled else { return }
+            self.startSuggestions = results
+            self.isSearchingStart = false
+        }
+    }
+
+    func selectStartSuggestion(_ suggestion: PlaceSuggestion) {
+        useCurrentLocationForStart = false
+        selectedStartName = suggestion.title
+        let start = Waypoint(coordinate: suggestion.coordinate, name: suggestion.title)
+        startWaypoint = start
+        startSearchQuery = suggestion.title
+        startSuggestions = []
+        cameraTarget = suggestion.coordinate
+
+        if let end = endWaypoint {
+            waypoints = [start, end]
+            selectedMode = .drive
+            placementPhase = .ready
+            Task { await refreshRoutedPolyline() }
+        } else {
+            waypoints = [start]
+            placementPhase = .pickingEnd
+        }
+    }
+
+    func selectCurrentLocationAsStart() {
+        useCurrentLocationForStart = true
+        selectedStartName = "Current Location"
+        startSearchQuery = ""
+        startSuggestions = []
+
+        guard let coord = currentCoordinate ?? userLocation else {
+            requestUserLocationAccess()
+            return
+        }
+
+        let start = Waypoint(coordinate: coord, name: "Current Location")
+        startWaypoint = start
+
+        if let end = endWaypoint {
+            waypoints = [start, end]
+            selectedMode = .drive
+            placementPhase = .ready
+            Task { await refreshRoutedPolyline() }
+        } else {
+            waypoints = [start]
+        }
+    }
+
+    func applySpeedPreset(_ mph: Double) {
+        let sanitized = DrivingDynamics.sanitizeCruiseSpeedMph(String(mph), fallback: mph)
+        driveSpeedMph = sanitized
+        customSpeedText = String(Int(driveSpeedMph))
+        if isPlaying {
+            player.profile = .drive(cruiseMph: driveSpeedMph, useRoadSpeedLimits: false)
+        }
+    }
+
+    func applyCustomSpeedText(_ text: String) {
+        let sanitized = DrivingDynamics.sanitizeCruiseSpeedMph(text, fallback: driveSpeedMph)
+        driveSpeedMph = sanitized
+        customSpeedText = String(Int(driveSpeedMph))
+        if isPlaying {
+            player.profile = .drive(cruiseMph: driveSpeedMph, useRoadSpeedLimits: false)
         }
     }
 

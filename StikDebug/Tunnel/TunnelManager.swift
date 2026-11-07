@@ -20,6 +20,18 @@ final class TunnelManager: ObservableObject {
         }
     }
 
+    func recordLocationBridgeStatus(connected: Bool) {
+        runOnMain {
+            self.isConnected = connected
+        }
+    }
+
+    func ensureDDIMountedInBackground() {
+        runOnMain {
+            self.mountDeveloperDiskImageIfNeeded()
+        }
+    }
+
     func start(showErrorUI: Bool = true) {
         guard Thread.isMainThread else {
             DispatchQueue.main.async {

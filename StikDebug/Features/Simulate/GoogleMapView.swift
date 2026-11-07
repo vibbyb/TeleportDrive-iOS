@@ -81,6 +81,7 @@ public struct GoogleMapView: UIViewRepresentable {
     public var routePolyline: MKPolyline?
     @Binding public var cameraTarget: CLLocationCoordinate2D?
     public var onMapTap: (CLLocationCoordinate2D) -> Void
+    public var onLongPress: ((CLLocationCoordinate2D) -> Void)?
 
     public init(
         mapStyle: GoogleMapStyle = .street,
@@ -90,8 +91,10 @@ public struct GoogleMapView: UIViewRepresentable {
         isHolding: Bool = false,
         routePolyline: MKPolyline? = nil,
         cameraTarget: Binding<CLLocationCoordinate2D?> = .constant(nil),
-        onMapTap: @escaping (CLLocationCoordinate2D) -> Void = { _ in }
+        onMapTap: @escaping (CLLocationCoordinate2D) -> Void = { _ in },
+        onLongPress: ((CLLocationCoordinate2D) -> Void)? = nil
     ) {
+        self.onLongPress = onLongPress
         self.mapStyle = mapStyle
         self.startCoordinate = startCoordinate
         self.endCoordinate = endCoordinate
@@ -122,6 +125,14 @@ public struct GoogleMapView: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         tap.numberOfTapsRequired = 1
         mapView.addGestureRecognizer(tap)
+
+        if onLongPress != nil {
+            let longPress = UILongPressGestureRecognizer(
+                target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+            longPress.minimumPressDuration = 0.5
+            tap.require(toFail: longPress)
+            mapView.addGestureRecognizer(longPress)
+        }
 
         return mapView
     }
@@ -188,6 +199,14 @@ public struct GoogleMapView: UIViewRepresentable {
             let point = gesture.location(in: mapView)
             let coord = mapView.convert(point, toCoordinateFrom: mapView)
             parent.onMapTap(coord)
+        }
+
+        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began,
+                  let handler = parent.onLongPress,
+                  let mapView = gesture.view as? MKMapView else { return }
+            let coord = mapView.convert(gesture.location(in: mapView), toCoordinateFrom: mapView)
+            handler(coord)
         }
 
         func syncAnnotations(

@@ -24,39 +24,128 @@ enum PairingFileStore {
         directoryURL.appendingPathComponent(fileName)
     }
 
+    static func isValidIdevicePairing(at url: URL, fileManager: FileManager = .default) -> Bool {
+        guard fileManager.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dict = plist as? [String: Any] else {
+            return false
+        }
+
+        guard let pubKey = dict["public_key"] as? Data, pubKey.count == 32,
+              let privKey = dict["private_key"] as? Data, privKey.count == 32,
+              let identifier = dict["identifier"] as? String,
+              !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        return true
+    }
+
+    static func normalizePairingData(_ data: Data) -> Data? {
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: .mutableContainersAndLeaves, format: nil),
+              var dict = plist as? [String: Any] else {
+            return nil
+        }
+
+        guard let pubKey = dict["public_key"] as? Data, pubKey.count == 32,
+              let privKey = dict["private_key"] as? Data, privKey.count == 32 else {
+            return nil
+        }
+
+        let existingIdentifier = (dict["identifier"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let id = existingIdentifier, !id.isEmpty {
+            dict["identifier"] = id
+        } else {
+            let hostId = (dict["host_identifier"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let hostId = hostId, !hostId.isEmpty {
+                dict["identifier"] = hostId
+            } else {
+                dict["identifier"] = "E77767E6-350D-3A46-AEC3-35E25C75D6DE"
+            }
+        }
+
+        if dict["alt_irk"] == nil, let peerAltIrk = dict["peer_alt_irk"] as? Data {
+            dict["alt_irk"] = peerAltIrk
+        }
+
+        return try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+    }
+
     @discardableResult
     static func prepareURL(fileManager: FileManager = .default) -> URL {
         let destination = url
         try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
-        guard !fileManager.fileExists(atPath: destination.path) else {
+        if fileManager.fileExists(atPath: destination.path) {
+            if isValidIdevicePairing(at: destination, fileManager: fileManager) {
+                removeLegacyCopies(fileManager: fileManager)
+                return destination
+            }
+
+            var healed = false
+            if let existingData = try? Data(contentsOf: destination),
+               let normalized = normalizePairingData(existingData) {
+                if (try? normalized.write(to: destination, options: .atomic)) != nil {
+                    protectPairingFile(at: destination, fileManager: fileManager)
+                    if isValidIdevicePairing(at: destination, fileManager: fileManager) {
+                        healed = true
+                    }
+                }
+            }
+
+            if !healed {
+                if let bundledURL = Bundle.main.url(forResource: "DefaultPairing", withExtension: "plist"),
+                   fileManager.fileExists(atPath: bundledURL.path),
+                   let bundledData = try? Data(contentsOf: bundledURL),
+                   let normalizedBundled = normalizePairingData(bundledData) ?? (isValidIdevicePairing(at: bundledURL, fileManager: fileManager) ? bundledData : nil) {
+                    try? normalizedBundled.write(to: destination, options: .atomic)
+                    protectPairingFile(at: destination, fileManager: fileManager)
+                }
+            }
+
             removeLegacyCopies(fileManager: fileManager)
             return destination
         }
 
         migrateLegacyCopy(to: destination, fileManager: fileManager)
 
-        if !fileManager.fileExists(atPath: destination.path) {
-            if let bundledURL = Bundle.main.url(forResource: "DefaultPairing", withExtension: "plist"),
-               fileManager.fileExists(atPath: bundledURL.path) {
-                if let data = try? Data(contentsOf: bundledURL) {
-                    try? data.write(to: destination, options: .atomic)
+        if fileManager.fileExists(atPath: destination.path) {
+            if !isValidIdevicePairing(at: destination, fileManager: fileManager) {
+                if let existingData = try? Data(contentsOf: destination),
+                   let normalized = normalizePairingData(existingData) {
+                    try? normalized.write(to: destination, options: .atomic)
                     protectPairingFile(at: destination, fileManager: fileManager)
                 }
             }
         }
 
+        if !fileManager.fileExists(atPath: destination.path) {
+            if let bundledURL = Bundle.main.url(forResource: "DefaultPairing", withExtension: "plist"),
+               fileManager.fileExists(atPath: bundledURL.path) {
+                if let data = try? Data(contentsOf: bundledURL) {
+                    let toWrite = normalizePairingData(data) ?? data
+                    try? toWrite.write(to: destination, options: .atomic)
+                    protectPairingFile(at: destination, fileManager: fileManager)
+                }
+            }
+        }
+
+        removeLegacyCopies(fileManager: fileManager)
         return destination
     }
 
     static func replace(with sourceURL: URL, fileManager: FileManager = .default) throws {
         let destination = prepareURL(fileManager: fileManager)
+        let rawData = try Data(contentsOf: sourceURL)
+        let dataToWrite = normalizePairingData(rawData) ?? rawData
+
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
 
         removeLegacyCopies(fileManager: fileManager)
-        try fileManager.copyItem(at: sourceURL, to: destination)
+        try dataToWrite.write(to: destination, options: .atomic)
         protectPairingFile(at: destination, fileManager: fileManager)
     }
 
@@ -81,6 +170,14 @@ enum PairingFileStore {
             try fileManager.removeItem(at: destination)
         }
         removeLegacyCopies(fileManager: fileManager)
+    }
+
+    static func resetToBundledDefault(fileManager: FileManager = .default) throws {
+        let destination = url
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        prepareURL(fileManager: fileManager)
     }
 
     private static var directoryURL: URL {

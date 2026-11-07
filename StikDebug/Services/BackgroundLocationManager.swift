@@ -9,20 +9,22 @@ final class BackgroundLocationManager: NSObject, CLLocationManagerDelegate {
     static let shared = BackgroundLocationManager()
 
     private let locationManager = CLLocationManager()
-    private var isRunning = false
+    private(set) var isRunning = false
     private var activityCount = 0
 
     private override init() {
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
-        locationManager.distanceFilter = CLLocationDistanceMax
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.pausesLocationUpdatesAutomatically = false
     }
 
     func start() {
         isRunning = true
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = kCLDistanceFilterNone
         switch locationManager.authorizationStatus {
         case .authorizedAlways:
             locationManager.startUpdatingLocation()

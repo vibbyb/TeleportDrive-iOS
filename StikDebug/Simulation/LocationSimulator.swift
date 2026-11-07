@@ -51,6 +51,12 @@ final class LocationSimulator: ObservableObject {
     @Published private(set) var isHolding = false
     @Published private(set) var lastError: LocationSimulatorError?
 
+    private let stateLock = NSLock()
+    private var sessionGeneration: UInt64 = 0
+    private var isWriteInFlight: Bool = false
+    private(set) var holdAnchorCoordinate: CLLocationCoordinate2D?
+    let holdIntervalSeconds: TimeInterval = 1.0
+
     private var holdTimer: DispatchSourceTimer?
     private var holdCoordinate: CLLocationCoordinate2D?
 
@@ -59,16 +65,47 @@ final class LocationSimulator: ObservableObject {
     // MARK: - Set location (called each tick by RoutePlayer)
 
     @discardableResult
-    func setLocation(_ coordinate: CLLocationCoordinate2D) async -> Result<Void, LocationSimulatorError> {
-        await withCheckedContinuation { continuation in
-            LocationSimulationCommandQueue.shared.async {
+    func setLocation(_ coordinate: CLLocationCoordinate2D, coalesceIfBusy: Bool = false) async -> Result<Void, LocationSimulatorError> {
+        let currentGeneration: UInt64
+        stateLock.lock()
+        if coalesceIfBusy && isWriteInFlight {
+            stateLock.unlock()
+            return .success(())
+        }
+        isWriteInFlight = true
+        currentGeneration = sessionGeneration
+        stateLock.unlock()
+
+        return await withCheckedContinuation { continuation in
+            LocationSimulationCommandQueue.shared.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: .failure(.clearFailed))
+                    return
+                }
+
+                self.stateLock.lock()
+                let stale = (self.sessionGeneration != currentGeneration)
+                if stale {
+                    self.isWriteInFlight = false
+                    self.stateLock.unlock()
+                    continuation.resume(returning: .success(()))
+                    return
+                }
+                self.stateLock.unlock()
+
                 let code = simulate_location(
                     DeviceConnectionContext.targetIPAddress,
                     coordinate.latitude,
                     coordinate.longitude,
                     PairingFileStore.prepareURL().path
                 )
+
+                self.stateLock.lock()
+                self.isWriteInFlight = false
+                self.stateLock.unlock()
+
                 if code == LocationSimulationStatus.ok {
+                    Task { @MainActor in self.lastError = nil }
                     continuation.resume(returning: .success(()))
                 } else {
                     let error = LocationSimulatorError(statusCode: code)
@@ -82,20 +119,26 @@ final class LocationSimulator: ObservableObject {
     // MARK: - Clear
 
     func clear() {
+        stateLock.lock()
+        sessionGeneration &+= 1
+        stateLock.unlock()
+
+        stopHold(deactivateKeepAlive: true)
+
         LocationSimulationCommandQueue.shared.async {
             _ = clear_simulated_location()
         }
-        stopHold()
     }
 
     // MARK: - Hold / keep-alive
     //
-    // Keeps re-sending the last coordinate every 4 seconds so iOS does not
+    // Keeps re-sending the last coordinate every 1.0 second so iOS does not
     // revert to the real GPS while the player is paused or at end-of-route.
 
     func startHold(at coordinate: CLLocationCoordinate2D, jitterMeters: Double = 0.35) {
-        stopHold()
+        stopHold(deactivateKeepAlive: false)
         holdCoordinate = coordinate
+        holdAnchorCoordinate = coordinate
         if Thread.isMainThread {
             self.isHolding = true
         } else {
@@ -103,37 +146,95 @@ final class LocationSimulator: ObservableObject {
                 self.isHolding = true
             }
         }
-        BackgroundAudioManager.shared.start()
+        SpoofKeepAliveManager.shared.activate()
 
-        let source = DispatchSource.makeTimerSource(queue: LocationSimulationCommandQueue.shared)
-        source.schedule(deadline: .now() + 4.0, repeating: 4.0, leeway: .milliseconds(100))
-        source.setEventHandler { [weak self] in
-            guard let self, let coord = self.holdCoordinate else { return }
-            let dLat = Double.random(in: -jitterMeters...jitterMeters) / 111_111.0
-            let cosLat = cos(coord.latitude * .pi / 180.0)
-            let dLon = Double.random(in: -jitterMeters...jitterMeters) / (111_111.0 * max(0.1, cosLat))
-            let jitteredLat = coord.latitude + dLat
-            let jitteredLon = coord.longitude + dLon
+        LocationSimulationCommandQueue.shared.async {
             _ = simulate_location(
                 DeviceConnectionContext.targetIPAddress,
-                jitteredLat,
-                jitteredLon,
+                coordinate.latitude,
+                coordinate.longitude,
                 PairingFileStore.prepareURL().path
             )
+        }
+
+        let source = DispatchSource.makeTimerSource(queue: LocationSimulationCommandQueue.shared)
+        source.schedule(deadline: .now() + holdIntervalSeconds, repeating: holdIntervalSeconds, leeway: .milliseconds(50))
+        source.setEventHandler { [weak self] in
+            guard let self,
+                  let anchor = self.holdAnchorCoordinate else { return }
+            let current = self.holdCoordinate ?? anchor
+
+            let cosLat = max(0.1, cos(anchor.latitude * .pi / 180.0))
+            let metersPerDegreeLat = 111_111.0
+            let metersPerDegreeLon = 111_111.0 * cosLat
+
+            let angle = Double.random(in: 0 ..< (2.0 * .pi))
+            let stepMeters = 0.12
+            let stepX = cos(angle) * stepMeters
+            let stepY = sin(angle) * stepMeters
+
+            var currentOffsetX = (current.longitude - anchor.longitude) * metersPerDegreeLon
+            var currentOffsetY = (current.latitude - anchor.latitude) * metersPerDegreeLat
+
+            currentOffsetX += stepX
+            currentOffsetY += stepY
+
+            let totalDist = hypot(currentOffsetX, currentOffsetY)
+            if totalDist > jitterMeters && totalDist > 0 {
+                let scale = jitterMeters / totalDist
+                currentOffsetX *= scale
+                currentOffsetY *= scale
+            }
+
+            let nextLat = anchor.latitude + (currentOffsetY / metersPerDegreeLat)
+            let nextLon = anchor.longitude + (currentOffsetX / metersPerDegreeLon)
+            let nextCoord = CLLocationCoordinate2D(latitude: nextLat, longitude: nextLon)
+            self.holdCoordinate = nextCoord
+
+            let code = simulate_location(
+                DeviceConnectionContext.targetIPAddress,
+                nextLat,
+                nextLon,
+                PairingFileStore.prepareURL().path
+            )
+            if code == LocationSimulationStatus.ok {
+                Task { @MainActor in self.lastError = nil }
+            }
         }
         self.holdTimer = source
         source.resume()
     }
 
-    func stopHold() {
+    func stopHold(deactivateKeepAlive: Bool = false) {
         holdTimer?.cancel()
         holdTimer = nil
         holdCoordinate = nil
+        holdAnchorCoordinate = nil
         if Thread.isMainThread {
             self.isHolding = false
         } else {
             DispatchQueue.main.async {
                 self.isHolding = false
+            }
+        }
+        if deactivateKeepAlive {
+            SpoofKeepAliveManager.shared.deactivate()
+        }
+    }
+
+    func refreshHoldIfNeeded() {
+        guard isHolding, let coord = holdAnchorCoordinate ?? holdCoordinate else { return }
+        LocationSimulationCommandQueue.shared.async { [weak self] in
+            let code = simulate_location(
+                DeviceConnectionContext.targetIPAddress,
+                coord.latitude,
+                coord.longitude,
+                PairingFileStore.prepareURL().path
+            )
+            if code == LocationSimulationStatus.ok {
+                Task { @MainActor [weak self] in
+                    self?.lastError = nil
+                }
             }
         }
     }

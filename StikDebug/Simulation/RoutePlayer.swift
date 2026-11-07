@@ -17,7 +17,7 @@ struct RouteStats {
 
 // MARK: - RoutePlayer
 //
-// Fixed-cadence (1 Hz wall-clock) location player.
+// Fixed-cadence (5 Hz wall-clock) location player.
 // Uses a DispatchSourceTimer so there is no drift from accumulated Task.sleep delays.
 //
 // Speed and course are NOT sent to the device (the FFI only accepts lat/lon).
@@ -49,7 +49,7 @@ final class RoutePlayer: ObservableObject {
     private var autoParkTimer: DispatchSourceTimer?
 
     // MARK: - Tick configuration
-    private let tickInterval: TimeInterval = 1.0
+    private let tickInterval: TimeInterval = 0.20
 
     // MARK: - Prepared route data
     private var densified: [CLLocationCoordinate2D] = []
@@ -62,6 +62,7 @@ final class RoutePlayer: ObservableObject {
     private var odometer: CLLocationDistance = 0
     private var currentSpeed: CLLocationSpeed = 0
     private var elapsedTime: TimeInterval = 0
+    private var lastTickUptime: TimeInterval?
     private var tickSource: DispatchSourceTimer?
 
     // MARK: - OSM speed limit cache (keyed by route hash)
@@ -87,18 +88,15 @@ final class RoutePlayer: ObservableObject {
             speeds = [CLLocationSpeed](repeating: profile.cruiseSpeed, count: max(1, densified.count - 1))
         }
 
-        // Pre-compute turn-aware target speeds: reduce at upcoming sharp turns
-        for i in 0..<speeds.count {
-            let angle = RouteGeometry.turnAngle(at: i + 1, coords: densified)
-            speeds[i] = DrivingDynamics.turnTargetSpeed(
-                baseCruise: speeds[i],
-                upcomingTurnAngle: angle,
-                factor: profile.turnSlowdownFactor
-            )
-            if profile.mode == .drive {
-                speeds[i] = max(speeds[i], DrivingDynamics.minimumDrivingSpeedMps)
-            }
-        }
+        // Multi-segment target speed computation with lookahead braking
+        speeds = DrivingDynamics.computeSegmentTargetSpeeds(
+            coords: densified,
+            cumulative: cumulative,
+            baseSpeeds: speeds,
+            turnSlowdownFactor: profile.turnSlowdownFactor,
+            braking: profile.braking,
+            enforceDrivingFloor: profile.mode == .drive
+        )
 
         var anchors: [BusStopAnchor] = []
         // Bus anchors will be populated when RouteStore provides RouteStop data.
@@ -112,6 +110,7 @@ final class RoutePlayer: ObservableObject {
             self.odometer    = 0
             self.currentSpeed = 0
             self.elapsedTime = 0
+            self.lastTickUptime = nil
             self.busStopStartTimes = [:]
             self.stats = RouteStats(totalDistance: total)
             self.isPreparing = false
@@ -122,12 +121,14 @@ final class RoutePlayer: ObservableObject {
 
     func play() {
         stopAutoPark()
+        SpoofKeepAliveManager.shared.activate()
+
         if profile.mode == .standstill {
             guard let coord = waypoints.first, !isPlaying else { return }
             currentCoordinate = coord
             isPlaying = true
             simulator.stopHold()
-            Task { _ = await simulator.setLocation(coord) }
+            Task { _ = await simulator.setLocation(coord, coalesceIfBusy: true) }
             simulator.startHold(at: coord)
             return
         }
@@ -135,6 +136,10 @@ final class RoutePlayer: ObservableObject {
         guard !densified.isEmpty, !isPlaying else { return }
         isPlaying = true
         simulator.stopHold()
+        lastTickUptime = ProcessInfo.processInfo.systemUptime
+        if profile.mode == .drive && currentSpeed < DrivingDynamics.minimumDrivingSpeedMps {
+            currentSpeed = min(profile.cruiseSpeed, DrivingDynamics.minimumDrivingSpeedMps)
+        }
         startTick()
     }
 
@@ -142,6 +147,7 @@ final class RoutePlayer: ObservableObject {
         guard isPlaying else { return }
         isPlaying = false
         stopTick()
+        lastTickUptime = nil
         stopAutoPark()
         if let coord = currentCoordinate {
             simulator.startHold(at: coord)
@@ -151,6 +157,7 @@ final class RoutePlayer: ObservableObject {
     func stop() {
         isPlaying = false
         stopTick()
+        lastTickUptime = nil
         stopAutoPark()
         simulator.clear()
         odometer = 0
@@ -163,11 +170,12 @@ final class RoutePlayer: ObservableObject {
 
     func teleportAndHold(at coordinate: CLLocationCoordinate2D) {
         stopTick()
+        lastTickUptime = nil
         stopAutoPark()
         isPlaying = false
         currentCoordinate = coordinate
         stats = RouteStats(speedMps: 0, course: 0, odometer: 0, totalDistance: 0, elapsed: 0, progress: 1.0, eta: 0)
-        Task { _ = await simulator.setLocation(coordinate) }
+        Task { _ = await simulator.setLocation(coordinate, coalesceIfBusy: true) }
         simulator.startHold(at: coordinate, jitterMeters: 0.25)
     }
 
@@ -227,7 +235,7 @@ final class RoutePlayer: ObservableObject {
     private func startTick() {
         stopTick()
         let source = DispatchSource.makeTimerSource(queue: .main)
-        source.schedule(deadline: .now() + tickInterval, repeating: tickInterval, leeway: .milliseconds(50))
+        source.schedule(deadline: .now() + tickInterval, repeating: tickInterval, leeway: .milliseconds(20))
         source.setEventHandler { [weak self] in
             self?.tick()
         }
@@ -246,8 +254,12 @@ final class RoutePlayer: ObservableObject {
         let total = cumulative.last ?? 0
         guard total > 0 else { stop(); return }
 
-        let scaledDt = tickInterval * speedMultiplier
-        elapsedTime += tickInterval
+        let now = ProcessInfo.processInfo.systemUptime
+        let rawDt = lastTickUptime.map { max(0.05, min(1.0, now - $0)) } ?? tickInterval
+        lastTickUptime = now
+
+        let scaledDt = rawDt * speedMultiplier
+        elapsedTime += rawDt
 
         // Bus dwell check
         var dwelling = false
@@ -274,12 +286,10 @@ final class RoutePlayer: ObservableObject {
             braking: profile.braking,
             dt: scaledDt
         )
-        currentSpeed = DrivingDynamics.applyJitter(speed: currentSpeed, jitter: profile.speedJitter)
 
-        // Advance odometer (paused at dwell = don't move)
-        if !dwelling {
-            odometer += currentSpeed * scaledDt
-        }
+        // CRITICAL: Do NOT overwrite currentSpeed with jitter! Instead compute effectiveSpeed
+        let effectiveSpeed = dwelling ? 0 : DrivingDynamics.applyJitter(speed: currentSpeed, jitter: profile.speedJitter * 0.4)
+        odometer += effectiveSpeed * scaledDt
 
         // End of route
         if odometer >= total {
@@ -287,19 +297,21 @@ final class RoutePlayer: ObservableObject {
             let (coord, bearing) = RouteGeometry.position(
                 at: odometer, coords: densified, cumulative: cumulative)
             currentCoordinate = coord
-            Task { _ = await simulator.setLocation(coord) }
+            Task { _ = await simulator.setLocation(coord, coalesceIfBusy: true) }
 
             if loop {
                 updateStats(speed: currentSpeed, bearing: bearing)
                 odometer = 0
                 currentSpeed = 0
+                lastTickUptime = ProcessInfo.processInfo.systemUptime
                 busStopStartTimes = [:]
             } else {
                 currentSpeed = 0
+                lastTickUptime = nil
                 updateStats(speed: 0, bearing: bearing)
                 isPlaying = false
                 stopTick()
-                simulator.startHold(at: coord, jitterMeters: 0.4)
+                simulator.startHold(at: coord, jitterMeters: 0.25)
                 if autoParkEnabled && (profile.mode == .drive || profile.mode == .custom) {
                     startAutoPark(at: coord)
                 }
@@ -312,7 +324,7 @@ final class RoutePlayer: ObservableObject {
             at: odometer, coords: densified, cumulative: cumulative)
         currentCoordinate = coord
         updateStats(speed: currentSpeed, bearing: bearing)
-        Task { _ = await simulator.setLocation(coord) }
+        Task { _ = await simulator.setLocation(coord, coalesceIfBusy: true) }
     }
 
     private func updateStats(speed: CLLocationSpeed, bearing: CLLocationDirection) {
@@ -343,8 +355,8 @@ final class RoutePlayer: ObservableObject {
     }
 
     private func maxStepMeters() -> CLLocationDistance {
-        // At 1 Hz, max step = max speed in m/s (no teleport jumps)
-        return profile.maxSpeed * tickInterval
+        // At 5 Hz, densify with fine steps (2.5–5.0m, default ~4.0m) for smooth curve rendering and pacing
+        return max(2.5, min(5.0, profile.maxSpeed * tickInterval))
     }
 
     // MARK: - OSM speed limit prefetch

@@ -17,8 +17,8 @@ enum AppBootstrapper {
     }
 
     private static func startConfiguredKeepAliveServices() {
-        guard UserDefaults.standard.bool(forKey: "keepAliveAudio") else { return }
-        BackgroundAudioManager.shared.start()
+        // Zero Battery Drain on Launch:
+        // Keep-alive services remain inactive until actively required by spoofing.
     }
 
     private static func applyDocumentPickerCopyWorkaround() {

@@ -8,6 +8,7 @@ struct RouteSimSettingsView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = true
 
     @StateObject private var tunnelManager = TunnelManager.shared
+    @ObservedObject private var keepAliveManager = SpoofKeepAliveManager.shared
     @State private var showClearRoutesConfirm = false
 
     var body: some View {
@@ -42,9 +43,22 @@ struct RouteSimSettingsView: View {
 
             // Keep-alive background
             Section("Background Keep-Alive") {
+                HStack {
+                    Label("Keep-Alive Engine", systemImage: "bolt.badge.clock")
+                    Spacer()
+                    if keepAliveManager.isActive {
+                        Label("Active (Spoofing Running)", systemImage: "circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    } else {
+                        Label("Idle (0% Battery)", systemImage: "circle")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
                 Toggle("Silent Audio", isOn: $keepAliveAudio)
                 Toggle("Location Update", isOn: $keepAliveLocation)
-                Text("Both are recommended to prevent iOS from stopping the simulation when the screen locks.")
+                Text("Background keep-alive runs only while spoofing is active. When idle, background services shut off completely for 0% battery drain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -114,18 +128,58 @@ private struct PairingFileSectionView: View {
     @State private var showPicker = false
     @State private var hasPairing = FileManager.default.fileExists(
         atPath: PairingFileStore.prepareURL().path)
+    @State private var importErrorMessage: String?
 
     var body: some View {
-        if hasPairing {
-            HStack {
-                Label("Pairing file imported", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Spacer()
-                Button("Replace") { showPicker = true }
-                    .font(.caption)
+        VStack(alignment: .leading, spacing: 8) {
+            if hasPairing {
+                HStack {
+                    Label("Pairing file imported", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Replace") { showPicker = true }
+                        .font(.caption)
+                }
+            } else {
+                Button("Import Pairing File") { showPicker = true }
             }
-        } else {
-            Button("Import Pairing File") { showPicker = true }
+
+            Button("Repair / Reset to Bundled Pairing") {
+                do {
+                    try PairingFileStore.resetToBundledDefault()
+                    hasPairing = FileManager.default.fileExists(atPath: PairingFileStore.prepareURL().path)
+                    importErrorMessage = nil
+                } catch {
+                    importErrorMessage = error.localizedDescription
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.blue)
+
+            if let err = importErrorMessage {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+        .fileImporter(
+            isPresented: $showPicker,
+            allowedContentTypes: PairingFileStore.supportedContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                do {
+                    try PairingFileStore.importFromPicker(url)
+                    hasPairing = FileManager.default.fileExists(atPath: PairingFileStore.prepareURL().path)
+                    importErrorMessage = nil
+                } catch {
+                    importErrorMessage = error.localizedDescription
+                }
+            case .failure(let error):
+                importErrorMessage = error.localizedDescription
+            }
         }
     }
 }

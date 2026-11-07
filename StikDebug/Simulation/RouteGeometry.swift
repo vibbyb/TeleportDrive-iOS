@@ -83,6 +83,47 @@ enum RouteGeometry {
         return diff > 180 ? 360 - diff : diff
     }
 
+    /// Enhanced turn angle supporting cumulative distances:
+    /// Returns the maximum of single-vertex turn angle and windowed curve deflection.
+    static func turnAngle(
+        at index: Int,
+        coords: [CLLocationCoordinate2D],
+        cumulative: [CLLocationDistance],
+        windowMeters: CLLocationDistance = 25.0
+    ) -> Double {
+        let singleVertexAngle = turnAngle(at: index, coords: coords)
+        let windowedAngle = windowedTurnAngle(at: index, coords: coords, cumulative: cumulative, windowMeters: windowMeters)
+        return max(singleVertexAngle, windowedAngle)
+    }
+
+    // MARK: - Windowed curve and turn angle detection
+
+    /// Computes the turn angle across a window of `windowMeters` (default 25m) behind and ahead of `index`.
+    /// This captures realistic road curve deflection that single-vertex angles underestimate.
+    static func windowedTurnAngle(
+        at index: Int,
+        coords: [CLLocationCoordinate2D],
+        cumulative: [CLLocationDistance],
+        windowMeters: CLLocationDistance = 25.0
+    ) -> Double {
+        guard index > 0, index < coords.count - 1, cumulative.count == coords.count else { return 0 }
+
+        var backIndex = index - 1
+        while backIndex > 0 && (cumulative[index] - cumulative[backIndex] < windowMeters) {
+            backIndex -= 1
+        }
+
+        var fwdIndex = index + 1
+        while fwdIndex < coords.count - 1 && (cumulative[fwdIndex] - cumulative[index] < windowMeters) {
+            fwdIndex += 1
+        }
+
+        let b1 = bearing(from: coords[backIndex], to: coords[index])
+        let b2 = bearing(from: coords[index],     to: coords[fwdIndex])
+        let diff = abs(b2 - b1)
+        return diff > 180 ? 360 - diff : diff
+    }
+
     // MARK: - Bearing (forward azimuth)
 
     static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> CLLocationDirection {

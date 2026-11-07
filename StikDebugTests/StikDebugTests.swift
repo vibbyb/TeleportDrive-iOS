@@ -275,4 +275,115 @@ final class RouteSimTests: XCTestCase {
         XCTAssertEqual(vm.waypoints.count, 2)
         XCTAssertEqual(vm.placementPhase, .ready)
     }
+
+    // MARK: - Chunk 4: DrivingDynamics, Speed Presets & Teleport Actions
+
+    func testDrivingDynamicsSanitizeCruiseSpeedMph() {
+        // Standard inputs
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("45"), 45.0)
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("  65  "), 65.0)
+
+        // Clamping to [10.0, 120.0]
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("2.0"), 10.0)
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("150.0"), 120.0)
+
+        // Invalid fallback
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("not-a-number", fallback: 35.0), 35.0)
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("", fallback: 40.0), 40.0)
+        XCTAssertEqual(DrivingDynamics.sanitizeCruiseSpeedMph("NaN", fallback: 25.0), 25.0)
+    }
+
+    func testDrivingDynamicsComputeSegmentTargetSpeedsLookaheadBraking() {
+        // Create an L-shaped route with a sharp 90-degree right turn at vertex 2
+        // Point 0 -> Point 1: 15m heading North
+        // Point 1 -> Point 2: 15m heading North (turn vertex)
+        // Point 2 -> Point 3: 20m heading East (90 deg turn)
+        let p0 = CLLocationCoordinate2D(latitude: 37.7740, longitude: -122.4194)
+        let p1 = CLLocationCoordinate2D(latitude: 37.77415, longitude: -122.4194)
+        let p2 = CLLocationCoordinate2D(latitude: 37.7743, longitude: -122.4194)
+        let p3 = CLLocationCoordinate2D(latitude: 37.7743, longitude: -122.4192)
+        let coords = [p0, p1, p2, p3]
+        let cumulative = RouteGeometry.cumulativeDistances(coords)
+
+        let baseCruise: CLLocationSpeed = 20.0 // ~45 mph
+        let baseSpeeds = [baseCruise, baseCruise, baseCruise]
+
+        let speeds = DrivingDynamics.computeSegmentTargetSpeeds(
+            coords: coords,
+            cumulative: cumulative,
+            baseSpeeds: baseSpeeds,
+            turnSlowdownFactor: 0.5,
+            braking: 2.5,
+            enforceDrivingFloor: false
+        )
+
+        XCTAssertEqual(speeds.count, 3)
+
+        // Segment 1 (entering the 90 degree turn at vertex 2) is slowed down
+        let turnSegmentSpeed = speeds[1]
+        XCTAssertLessThan(turnSegmentSpeed, baseCruise)
+
+        // Lookahead braking: segment 0 prior to the turn must begin deceleration below base cruise
+        let preTurnSpeed = speeds[0]
+        XCTAssertLessThan(preTurnSpeed, baseCruise)
+    }
+
+    @MainActor
+    func testSimulateViewModelDriveSpeedPresetsAndCustomText() {
+        let vm = SimulateViewModel()
+
+        // Default speed preset list
+        XCTAssertEqual(SimulateViewModel.driveSpeedPresetsMph, [25, 35, 45, 65])
+
+        // Apply speed preset
+        vm.applySpeedPreset(45.0)
+        XCTAssertEqual(vm.driveSpeedMph, 45.0)
+        XCTAssertEqual(vm.customSpeedText, "45")
+
+        // Apply custom text
+        vm.applyCustomSpeedText("65")
+        XCTAssertEqual(vm.driveSpeedMph, 65.0)
+        XCTAssertEqual(vm.customSpeedText, "65")
+
+        // Apply invalid text falls back to current driveSpeedMph
+        vm.applyCustomSpeedText("invalid-speed")
+        XCTAssertEqual(vm.driveSpeedMph, 65.0)
+        XCTAssertEqual(vm.customSpeedText, "65")
+    }
+
+    @MainActor
+    func testSimulateViewModelTeleportTargetSelection() {
+        let vm = SimulateViewModel()
+        let targetCoord = CLLocationCoordinate2D(latitude: 37.7833, longitude: -122.4167)
+        vm.selectTeleportTarget(coordinate: targetCoord, title: "Market St")
+
+        XCTAssertEqual(vm.selectedDestinationName, "Market St")
+        XCTAssertEqual(vm.startWaypoint?.name, "Market St")
+        XCTAssertEqual(vm.startWaypoint?.coordinate.latitude, targetCoord.latitude)
+        XCTAssertEqual(vm.waypoints.count, 1)
+        XCTAssertEqual(vm.cameraTarget?.latitude, targetCoord.latitude)
+    }
+
+    @MainActor
+    func testSimulateViewModelStartSuggestionsAndCurrentLocation() {
+        let vm = SimulateViewModel()
+        XCTAssertTrue(vm.useCurrentLocationForStart)
+        XCTAssertEqual(vm.selectedStartName, "Current Location")
+
+        // Select a place as start
+        let startCoord = CLLocationCoordinate2D(latitude: 37.3346, longitude: -122.0090)
+        let suggestion = PlaceSuggestion(title: "Apple Park", subtitle: "Cupertino", coordinate: startCoord)
+        vm.selectStartSuggestion(suggestion)
+
+        XCTAssertFalse(vm.useCurrentLocationForStart)
+        XCTAssertEqual(vm.selectedStartName, "Apple Park")
+        XCTAssertEqual(vm.startSearchQuery, "Apple Park")
+        XCTAssertEqual(vm.startWaypoint?.coordinate.latitude, startCoord.latitude)
+
+        // Switch back to Current Location
+        vm.selectCurrentLocationAsStart()
+        XCTAssertTrue(vm.useCurrentLocationForStart)
+        XCTAssertEqual(vm.selectedStartName, "Current Location")
+        XCTAssertEqual(vm.startSearchQuery, "")
+    }
 }
