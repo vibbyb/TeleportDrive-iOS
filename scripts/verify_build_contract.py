@@ -96,7 +96,7 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
         if "holdIntervalSeconds" not in text and "1.0" not in text:
             failures.append("StikDebug/Simulation/LocationSimulator.swift does not specify 1 Hz hold cadence")
 
-    # 3. RoutePlayer implements isAutoParking and 5 Hz playback
+    # 3. RoutePlayer implements isAutoParking and 1 Hz playback
     route_player = repo_path / "StikDebug" / "Simulation" / "RoutePlayer.swift"
     if not route_player.is_file():
         failures.append(f"Missing file: {route_player}")
@@ -104,8 +104,8 @@ def verify_code_contracts(repo_path: Path) -> tuple[bool, list[str]]:
         text = route_player.read_text(encoding="utf-8")
         if "isAutoParking" not in text:
             failures.append("StikDebug/Simulation/RoutePlayer.swift does not implement isAutoParking")
-        if "0.2" not in text and "5 Hz" not in text:
-            failures.append("StikDebug/Simulation/RoutePlayer.swift does not implement 5 Hz playback")
+        if "1.0" not in text and "1 Hz" not in text:
+            failures.append("StikDebug/Simulation/RoutePlayer.swift does not implement 1 Hz playback")
 
     # 4. GoogleMapView implements MKTileOverlay
     google_map = repo_path / "StikDebug" / "Features" / "Simulate" / "GoogleMapView.swift"

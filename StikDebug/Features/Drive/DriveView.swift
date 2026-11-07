@@ -358,7 +358,7 @@ struct DriveView: View {
                     }
                 }
 
-                Text("Smart curve & turn slowdown active • Life360 5 Hz telemetry")
+                Text("Smart curve & turn slowdown active • Life360 1 Hz telemetry")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

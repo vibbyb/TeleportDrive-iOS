@@ -157,7 +157,7 @@ class TestVerifyCodeContracts:
             )
             (repo / "StikDebug" / "Simulation" / "RoutePlayer.swift").write_text(
                 "var isAutoParking: Bool = false\n"
-                "private let tickInterval: TimeInterval = 0.20 // 5 Hz",
+                "private let tickInterval: TimeInterval = 1.0 // 1 Hz",
                 encoding="utf-8",
             )
             (repo / "StikDebug" / "Features" / "Simulate" / "GoogleMapView.swift").write_text(

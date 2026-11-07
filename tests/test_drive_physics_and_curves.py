@@ -78,16 +78,16 @@ class TestRoutePlayerContract:
         assert self.player_file.is_file(), f"Missing {self.player_file}"
         self.player_code = self.player_file.read_text(encoding="utf-8")
 
-    def test_5hz_cadence_tick_interval(self) -> None:
-        assert "private let tickInterval: TimeInterval = 0.20" in self.player_code
+    def test_1hz_cadence_tick_interval(self) -> None:
+        assert "private let tickInterval: TimeInterval = 1.0" in self.player_code
 
     def test_monotonic_uptime_pacing(self) -> None:
         assert "private var lastTickUptime: TimeInterval?" in self.player_code
         assert "ProcessInfo.processInfo.systemUptime" in self.player_code
-        assert "max(0.05, min(1.0, now - $0))" in self.player_code
+        assert "max(0.1, min(2.0, now - $0))" in self.player_code
 
     def test_max_step_meters_densification(self) -> None:
-        assert "max(2.5, min(5.0, profile.maxSpeed * tickInterval))" in self.player_code
+        assert "profile.maxSpeed * tickInterval" in self.player_code
 
     def test_keep_alive_activation_on_play(self) -> None:
         assert "SpoofKeepAliveManager.shared.activate()" in self.player_code

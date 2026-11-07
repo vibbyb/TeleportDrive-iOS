@@ -17,7 +17,7 @@ struct RouteStats {
 
 // MARK: - RoutePlayer
 //
-// Fixed-cadence (5 Hz wall-clock) location player.
+// Fixed-cadence (1 Hz wall-clock) location player.
 // Uses a DispatchSourceTimer so there is no drift from accumulated Task.sleep delays.
 //
 // Speed and course are NOT sent to the device (the FFI only accepts lat/lon).
@@ -49,7 +49,7 @@ final class RoutePlayer: ObservableObject {
     private var autoParkTimer: DispatchSourceTimer?
 
     // MARK: - Tick configuration
-    private let tickInterval: TimeInterval = 0.20
+    private let tickInterval: TimeInterval = 1.0
 
     // MARK: - Prepared route data
     private var densified: [CLLocationCoordinate2D] = []
@@ -235,7 +235,7 @@ final class RoutePlayer: ObservableObject {
     private func startTick() {
         stopTick()
         let source = DispatchSource.makeTimerSource(queue: .main)
-        source.schedule(deadline: .now() + tickInterval, repeating: tickInterval, leeway: .milliseconds(20))
+        source.schedule(deadline: .now() + tickInterval, repeating: tickInterval, leeway: .milliseconds(50))
         source.setEventHandler { [weak self] in
             self?.tick()
         }
@@ -255,7 +255,7 @@ final class RoutePlayer: ObservableObject {
         guard total > 0 else { stop(); return }
 
         let now = ProcessInfo.processInfo.systemUptime
-        let rawDt = lastTickUptime.map { max(0.05, min(1.0, now - $0)) } ?? tickInterval
+        let rawDt = lastTickUptime.map { max(0.1, min(2.0, now - $0)) } ?? tickInterval
         lastTickUptime = now
 
         let scaledDt = rawDt * speedMultiplier
@@ -355,8 +355,8 @@ final class RoutePlayer: ObservableObject {
     }
 
     private func maxStepMeters() -> CLLocationDistance {
-        // At 5 Hz, densify with fine steps (2.5–5.0m, default ~4.0m) for smooth curve rendering and pacing
-        return max(2.5, min(5.0, profile.maxSpeed * tickInterval))
+        // At 1 Hz, max step = max speed in m/s (no teleport jumps)
+        return max(2.5, profile.maxSpeed * tickInterval)
     }
 
     // MARK: - OSM speed limit prefetch
