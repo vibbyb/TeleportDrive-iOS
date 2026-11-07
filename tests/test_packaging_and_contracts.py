@@ -547,3 +547,12 @@ class TestCLIExecutions:
             )
             assert verify_res.returncode == 0
             assert "IPA_VERIFIED_READY" in verify_res.stdout
+
+    def test_stikdebug_tests_imports_mapkit(self) -> None:
+        """Verify that StikDebugTests imports MapKit for MKTileOverlayPath and tile overlays."""
+        repo_root = Path(__file__).resolve().parent.parent
+        tests_file = repo_root / "StikDebugTests" / "StikDebugTests.swift"
+        assert tests_file.is_file(), f"Missing {tests_file}"
+        content = tests_file.read_text(encoding="utf-8")
+        assert "import MapKit" in content, "StikDebugTests.swift must import MapKit for MKTileOverlayPath"
+        assert "MKTileOverlayPath" in content, "StikDebugTests.swift must test MKTileOverlayPath"
