@@ -19,4 +19,20 @@ enum DeviceConnectionContext {
         }
         return stored
     }
+
+    static var candidateIPs: [String] {
+        let current = targetIPAddress
+        var list = [current]
+        let defaults = ["10.7.0.1", "10.7.0.2", "127.0.0.1"]
+        for ip in defaults where !list.contains(ip) {
+            list.append(ip)
+        }
+        return list
+    }
+
+    static func recordWorkingIP(_ ip: String) {
+        let clean = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        UserDefaults.standard.set(clean, forKey: UserDefaults.Keys.targetDeviceIP)
+    }
 }

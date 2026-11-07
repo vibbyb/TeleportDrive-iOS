@@ -178,30 +178,45 @@ final class JITEnableContext {
         let pairingFile = try getPairingFile()
         defer { rp_pairing_file_free(pairingFile) }
 
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(49152).bigEndian
+        let candidates = DeviceConnectionContext.candidateIPs
+        var lastError: NSError?
 
-        let deviceIP = DeviceConnectionContext.targetIPAddress
-        guard deviceIP.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
-            throw makeError("Failed to parse target IP address.", code: -18)
-        }
+        for deviceIP in candidates {
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = in_port_t(49152).bigEndian
 
-        var tunnel = TunnelHandles()
-        let ffiError = hostname.withCString { hn in
-            withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    tunnel_create_rppairing($0, socklen_t(MemoryLayout<sockaddr_in>.stride),
-                        hn, pairingFile, nil, nil, &tunnel.adapter, &tunnel.handshake)
+            guard deviceIP.withCString({ inet_pton(AF_INET, $0, &addr.sin_addr) }) == 1 else {
+                continue
+            }
+
+            var tunnel = TunnelHandles()
+            let ffiError = hostname.withCString { hn in
+                withUnsafePointer(to: &addr) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        tunnel_create_rppairing($0, socklen_t(MemoryLayout<sockaddr_in>.stride),
+                            hn, pairingFile, nil, nil, &tunnel.adapter, &tunnel.handshake)
+                    }
                 }
             }
+
+            if let ffiError {
+                lastError = makeFFIError(ffiError, fallback: "Failed to create tunnel at \(deviceIP)")
+                tunnel.free()
+                continue
+            }
+
+            guard tunnel.adapter != nil, tunnel.handshake != nil else {
+                var t = tunnel
+                t.free()
+                continue
+            }
+
+            DeviceConnectionContext.recordWorkingIP(deviceIP)
+            return tunnel
         }
-        if let ffiError { throw makeFFIError(ffiError, fallback: "Failed to create tunnel") }
-        guard tunnel.adapter != nil, tunnel.handshake != nil else {
-            var t = tunnel; t.free()
-            throw makeError("Tunnel created without valid handles")
-        }
-        return tunnel
+
+        throw lastError ?? makeError("Tunnel created without valid handles on any candidate IP (\(candidates.joined(separator: ", ")))")
     }
 
     private func getPairingFile() throws -> OpaquePointer {

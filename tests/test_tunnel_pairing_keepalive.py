@@ -102,6 +102,16 @@ class TestSwiftArchitectureInvariants:
         assert "resetToBundledDefault" in content
         assert "DefaultPairing" in content
         assert "E77767E6-350D-3A46-AEC3-35E25C75D6DE" in content
+        assert "hasUserImportedCustomPairing" in content
+
+    def test_device_connection_candidate_ips_invariants(self) -> None:
+        path = REPO_ROOT / "StikDebug" / "Tunnel" / "DeviceConnectionContext.swift"
+        assert path.is_file()
+        content = path.read_text(encoding="utf-8")
+        assert "candidateIPs" in content
+        assert "10.7.0.1" in content
+        assert "10.7.0.2" in content
+        assert "recordWorkingIP" in content
 
     def test_spoof_keep_alive_manager_invariants(self) -> None:
         path = REPO_ROOT / "StikDebug" / "Services" / "SpoofKeepAliveManager.swift"

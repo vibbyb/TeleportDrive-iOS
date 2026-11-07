@@ -82,15 +82,6 @@ func simulate_location(
     }
 
     // Slow path: build a fresh RSD tunnel
-    var address = sockaddr_in()
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_port = in_port_t(49152).bigEndian
-
-    let inetResult = deviceIP.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
-    guard inetResult == 1 else {
-        return LocationSimulationStatus.invalidIP
-    }
-
     var pairingHandle: OpaquePointer?
     if let pairingError = pairingFile.withCString({ rp_pairing_file_read($0, &pairingHandle) }) {
         idevice_error_free(pairingError)
@@ -101,24 +92,54 @@ func simulate_location(
     }
     defer { rp_pairing_file_free(pairingHandle) }
 
-    let providerError = withUnsafePointer(to: &address) { pointer in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            tunnel_create_rppairing(
-                $0,
-                socklen_t(MemoryLayout<sockaddr_in>.stride),
-                "RouteSimLocation",
-                pairingHandle,
-                nil,
-                nil,
-                &LocationSimulationState.adapter,
-                &LocationSimulationState.handshake
-            )
+    let candidateIPs: [String] = {
+        var list = [deviceIP]
+        for ip in DeviceConnectionContext.candidateIPs where !list.contains(ip) {
+            list.append(ip)
+        }
+        return list
+    }()
+
+    var tunnelConnected = false
+    var lastProviderStatus: Int32 = LocationSimulationStatus.providerCreate
+
+    for targetIP in candidateIPs {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(49152).bigEndian
+
+        let inetResult = targetIP.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        guard inetResult == 1 else { continue }
+
+        let providerError = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                tunnel_create_rppairing(
+                    $0,
+                    socklen_t(MemoryLayout<sockaddr_in>.stride),
+                    "RouteSimLocation",
+                    pairingHandle,
+                    nil,
+                    nil,
+                    &LocationSimulationState.adapter,
+                    &LocationSimulationState.handshake
+                )
+            }
+        }
+        if let providerError {
+            idevice_error_free(providerError)
+            LocationSimulationState.cleanup()
+            continue
+        }
+
+        if LocationSimulationState.adapter != nil && LocationSimulationState.handshake != nil {
+            DeviceConnectionContext.recordWorkingIP(targetIP)
+            tunnelConnected = true
+            break
         }
     }
-    if let providerError {
-        idevice_error_free(providerError)
-        LocationSimulationState.cleanup()
-        return LocationSimulationStatus.providerCreate
+
+    guard tunnelConnected else {
+        return lastProviderStatus
     }
 
     let remoteServerError = remote_server_connect_rsd(

@@ -34,6 +34,29 @@ struct RouteSimSettingsView: View {
                         .keyboardType(.decimalPad)
                         .frame(maxWidth: 140)
                 }
+
+                HStack {
+                    Text("Presets:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("10.7.0.1") {
+                        deviceIP = "10.7.0.1"
+                        startTunnelInBackground()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+
+                    Button("10.7.0.2") {
+                        deviceIP = "10.7.0.2"
+                        startTunnelInBackground()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                }
+
+                Text("Auto-probes both 10.7.0.1 and 10.7.0.2 automatically. If LocalDevVPN shows Tunnel IP is 1, use 10.7.0.2.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             // Pairing

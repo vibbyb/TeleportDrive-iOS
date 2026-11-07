@@ -15,6 +15,12 @@ enum PairingFileStore {
     ]
 
     private static let legacyFileName = "pairingFile.plist"
+    private static let userCustomImportKey = "hasUserImportedCustomPairing"
+
+    static var hasUserImportedCustomPairing: Bool {
+        get { UserDefaults.standard.bool(forKey: userCustomImportKey) }
+        set { UserDefaults.standard.set(newValue, forKey: userCustomImportKey) }
+    }
 
     static var hasPairingFile: Bool {
         FileManager.default.fileExists(atPath: prepareURL().path)
@@ -77,6 +83,19 @@ enum PairingFileStore {
         let destination = url
         try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
+        // If the user has not explicitly imported a custom pairing file, always ensure
+        // the bundled DefaultPairing.plist is synchronized so app updates never get stuck with old sandbox files.
+        if !hasUserImportedCustomPairing,
+           let bundledURL = Bundle.main.url(forResource: "DefaultPairing", withExtension: "plist"),
+           fileManager.fileExists(atPath: bundledURL.path),
+           let bundledData = try? Data(contentsOf: bundledURL),
+           let normalizedBundled = normalizePairingData(bundledData) ?? (isValidIdevicePairing(at: bundledURL, fileManager: fileManager) ? bundledData : nil) {
+            try? normalizedBundled.write(to: destination, options: .atomic)
+            protectPairingFile(at: destination, fileManager: fileManager)
+            removeLegacyCopies(fileManager: fileManager)
+            return destination
+        }
+
         if fileManager.fileExists(atPath: destination.path) {
             if isValidIdevicePairing(at: destination, fileManager: fileManager) {
                 removeLegacyCopies(fileManager: fileManager)
@@ -136,6 +155,7 @@ enum PairingFileStore {
     }
 
     static func replace(with sourceURL: URL, fileManager: FileManager = .default) throws {
+        hasUserImportedCustomPairing = true
         let destination = prepareURL(fileManager: fileManager)
         let rawData = try Data(contentsOf: sourceURL)
         let dataToWrite = normalizePairingData(rawData) ?? rawData
@@ -173,6 +193,7 @@ enum PairingFileStore {
     }
 
     static func resetToBundledDefault(fileManager: FileManager = .default) throws {
+        hasUserImportedCustomPairing = false
         let destination = url
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
