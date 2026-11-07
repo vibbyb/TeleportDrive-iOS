@@ -66,6 +66,9 @@ func simulate_location(
     _ longitude: Double,
     _ pairingFile: String
 ) -> Int32 {
+#if targetEnvironment(simulator)
+    return LocationSimulationStatus.ok
+#else
     // Fast path: reuse cached session
     if let locationSimulation = LocationSimulationState.locationSimulation {
         if let ffiError = location_simulation_set(locationSimulation, latitude, longitude) {
@@ -158,11 +161,15 @@ func simulate_location(
 
     TunnelManager.shared.recordLocationBridgeStatus(connected: true)
     return LocationSimulationStatus.ok
+#endif
 }
 
 // MARK: - Clear (stop spoofing, return device to real GPS)
 
 func clear_simulated_location() -> Int32 {
+#if targetEnvironment(simulator)
+    return LocationSimulationStatus.ok
+#else
     guard let locationSimulation = LocationSimulationState.locationSimulation else {
         return LocationSimulationStatus.locationClear
     }
@@ -173,4 +180,5 @@ func clear_simulated_location() -> Int32 {
         return LocationSimulationStatus.locationClear
     }
     return LocationSimulationStatus.ok
+#endif
 }
